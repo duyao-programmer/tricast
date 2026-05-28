@@ -1,0 +1,2 @@
+- [消息发布订阅演示系统](project_overview.md) — 基于 RabbitMQ + FastAPI + MySQL + Nginx 的三角色消息发布订阅演示项目
+- [架构方案审查偏好](feedback_architecture_review.md) — 用户对架构方案进行多轮细致审查，关注安全性、数据一致性、运维等问题
