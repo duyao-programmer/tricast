@@ -23,10 +23,10 @@ docker compose logs -f fastapi
 
 | 服务 | 地址 | 认证 |
 |------|------|------|
-| API 文档 (Swagger) | http://localhost/docs | JWT |
+| API 文档 (Swagger) | https://localhost/docs | JWT |
 | RabbitMQ 管理 | http://localhost:15672 | demo_user / demo_pass_2024 |
 | 数据库管理 (Adminer) | http://localhost:8080 | 服务器填 `mysql`，root / root_pass_2024 |
-| Nginx 反向代理 | http://localhost | — |
+| Nginx 反向代理 | https://localhost | — |
 
 ## 预置账号
 
@@ -76,12 +76,14 @@ demo20250527/
 │       └── messages.py      # GET /api/messages + /stats
 ├── docker-compose.yml       # 5 服务编排
 ├── Dockerfile               # FastAPI 容器镜像
-├── nginx.conf               # 反向代理配置
+├── nginx.conf               # 反向代理配置（HTTPS + HTTP→HTTPS 重定向）
 ├── init.sql                 # 建表 + 预置用户
 ├── requirements.txt         # Python 依赖
 ├── .env.example             # 环境变量模板
+├── certs/                   # 自签名 TLS 证书（自动生成，已 gitignore）
 └── scripts/
-    └── gen_password_hash.py # bcrypt 哈希生成工具
+    ├── gen_password_hash.py # bcrypt 哈希生成工具
+    └── init-certs.sh        # 自签名证书生成脚本（容器内备用）
 ```
 
 ## API 端点
@@ -97,6 +99,7 @@ demo20250527/
 | GET | `/api/messages` | 登录 | 消息列表（按角色返回不同字段） |
 | GET | `/api/messages/{id}` | 登录 | 消息详情（按角色返回不同字段） |
 | GET | `/api/messages/stats` | admin | 各通道耗时统计（min/max/avg/count） |
+| GET | `/api/messages/dead` | admin | 死信队列内容（最近 200 条） |
 
 ## 数据可见性矩阵
 
@@ -228,8 +231,8 @@ CONSUME_INTERVAL_SECONDS=10
 
 ## 已知局限
 
-1. **死信队列**: 仅收集不处理，生产环境需增加监控/重试/告警
-2. **pool_pre_ping**: 因 aiomysql/asyncmy 驱动 ping() 签名不兼容而禁用，连接验证依赖 DB 写入重试
-3. **HTTPS**: 演示环境使用 HTTP，生产环境需在 Nginx 层启用 HTTPS
-4. **注册密码强度**: 当前无强制策略，代码中保留校验接口供扩展
-5. **重复发布**: Outbox 发布成功但状态更新失败时，下次轮询会重复发布，依赖消费者幂等性屏蔽
+1. **死信队列**: 已增加死信消费者（记录日志 + 内存存储），提供 `GET /api/messages/dead`（admin）查询最近 200 条死信。生产环境可进一步接入告警通道
+2. **数据库驱动**: 已从 aiomysql 切换为 asyncmy（性能更优，支持 `pool_pre_ping`），并添加 `pool_recycle=3600` 双保险
+3. **HTTPS**: 已启用 HTTPS（自签名证书 + Nginx 443 端口），HTTP 自动 301 重定向。生产环境需替换为 CA 签名证书
+4. **注册密码强度**: 已添加复杂度校验（至少 8 位，含大小写字母和数字）
+5. **重复发布**: 已添加 outbox 去重检查（发布前查询 message_receipts），消费者端 UNIQUE 约束作为最终幂等兜底

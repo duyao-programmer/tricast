@@ -16,6 +16,7 @@ from app.services.rabbitmq import (
     QUEUE_ADMIN,
     QUEUE_ADVANCED,
     QUEUE_REGULAR,
+    QUEUE_DEAD,
 )
 from app.services.outbox import run_outbox_publisher
 from app.api import health, auth, publish, messages
@@ -29,6 +30,11 @@ logger.add(
     format="<green>{time:YYYY-MM-DD HH:mm:ss}</green> | <level>{level: <8}</level> | <level>{message}</level>",
     level="DEBUG" if settings.app_debug else "INFO",
 )
+
+# ============================================================================
+# 死信消息内存存储（最多保留 200 条，供 API 查询）
+# ============================================================================
+dead_letter_store: list[dict] = []
 
 
 # ============================================================================
@@ -102,6 +108,34 @@ async def handle_message(body: bytes, consumer_role: str):
     )
 
 
+async def handle_dead_message(body: bytes, consumer_role: str):
+    """
+    死信消费者回调：记录死信消息到日志和内存存储。
+    不写 database — 死信消费者仅做可观测性，不改业务数据。
+    """
+    import json
+    from datetime import datetime, timezone
+
+    try:
+        event_data = json.loads(body.decode("utf-8"))
+    except Exception:
+        event_data = {"raw": body.decode("utf-8", errors="replace")}
+
+    record = {
+        "received_at": datetime.now(timezone.utc).isoformat(),
+        "consumer_role": consumer_role,
+        "body": event_data,
+    }
+
+    dead_letter_store.append(record)
+    if len(dead_letter_store) > 200:
+        dead_letter_store[:] = dead_letter_store[-200:]
+
+    msg_id = event_data.get("message_id", "?")
+    msg_title = event_data.get("title", "?")
+    logger.warning("死信消息已记录: message_id={}, title={}", msg_id, msg_title)
+
+
 # ============================================================================
 # Lifespan 管理
 # ============================================================================
@@ -128,7 +162,7 @@ async def lifespan(app: FastAPI):
         name="outbox_publisher",
     )
 
-    # 启动三个消费者协程
+    # 启动三个角色消费者协程
     consumer_tasks = []
     for queue_name, consumer_role in [
         (QUEUE_ADMIN, "admin"),
@@ -141,6 +175,13 @@ async def lifespan(app: FastAPI):
         )
         consumer_tasks.append(task)
 
+    # 启动死信消费者
+    dead_task = asyncio.create_task(
+        consume_queue(QUEUE_DEAD, "dead", handle_dead_message, shutdown_event),
+        name="consumer_dead",
+    )
+    consumer_tasks.append(dead_task)
+
     logger.info("所有后台协程已启动（outbox 发布器 + {} 个消费者）", len(consumer_tasks))
     logger.info("FastAPI 服务已就绪: http://0.0.0.0:8000")
     logger.info("API 文档: http://0.0.0.0:8000/docs")
@@ -148,6 +189,7 @@ async def lifespan(app: FastAPI):
     # 将协程引用保存到 app.state，供健康监控使用
     app.state.consumer_tasks = consumer_tasks
     app.state.outbox_task = outbox_task
+    app.state.dead_letter_store = dead_letter_store
 
     yield
 

@@ -7,7 +7,7 @@ from pydantic import BaseModel, Field, field_validator
 class UserRegisterRequest(BaseModel):
     """用户注册请求"""
     username: str = Field(..., min_length=3, max_length=50, description="用户名")
-    password: str = Field(..., min_length=6, max_length=100, description="密码")
+    password: str = Field(..., min_length=8, max_length=100, description="密码")
 
     @field_validator("username")
     @classmethod
@@ -16,6 +16,21 @@ class UserRegisterRequest(BaseModel):
         if not v.replace("_", "").isalnum():
             raise ValueError("用户名只能包含字母、数字和下划线")
         return v.strip()
+
+    @field_validator("password")
+    @classmethod
+    def validate_password(cls, v: str) -> str:
+        """校验密码复杂度：至少8位，含大小写字母和数字"""
+        errors = []
+        if not any(c.isupper() for c in v):
+            errors.append("至少包含一个大写字母")
+        if not any(c.islower() for c in v):
+            errors.append("至少包含一个小写字母")
+        if not any(c.isdigit() for c in v):
+            errors.append("至少包含一个数字")
+        if errors:
+            raise ValueError("密码强度不足: " + "; ".join(errors))
+        return v
 
 
 class UserLoginRequest(BaseModel):

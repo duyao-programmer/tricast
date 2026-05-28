@@ -1,7 +1,7 @@
 # ============================================================================
 # 消息查询接口（角色分级 Schema 分发）
 # ============================================================================
-from fastapi import APIRouter, Depends, HTTPException, status, Query
+from fastapi import APIRouter, Depends, HTTPException, status, Query, Request
 from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import joinedload, selectinload
@@ -191,6 +191,16 @@ async def get_message_stats(
         ))
 
     return stats_list
+
+
+@router.get("/dead")
+async def list_dead_letters(
+    request: Request,
+    current_user: dict = Depends(require_role("admin")),
+):
+    """死信队列内容（仅管理员）—— 从内存返回最近记录的 200 条死信"""
+    store: list = getattr(request.app.state, "dead_letter_store", [])
+    return {"total": len(store), "items": store}
 
 
 @router.get("/{message_id}")

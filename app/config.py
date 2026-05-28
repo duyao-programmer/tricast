@@ -39,9 +39,9 @@ class Settings(BaseSettings):
 
     @property
     def mysql_url(self) -> str:
-        """构建异步 MySQL 连接 URL（使用 aiomysql 驱动）"""
+        """构建异步 MySQL 连接 URL（使用 asyncmy 驱动）"""
         return (
-            f"mysql+aiomysql://{self.mysql_user}:{self.mysql_password}"
+            f"mysql+asyncmy://{self.mysql_user}:{self.mysql_password}"
             f"@{self.mysql_host}:{self.mysql_port}/{self.mysql_database}"
         )
 

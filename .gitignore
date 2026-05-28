@@ -1,6 +1,9 @@
 # 环境变量
 .env
 
+# 证书（自动生成）
+certs/
+
 # Python
 __pycache__/
 *.py[cod]

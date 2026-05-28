@@ -5,7 +5,7 @@ import asyncio
 import json as _json
 from sqlalchemy import select, update
 from app.database import AsyncSessionLocal
-from app.models.message import Outbox
+from app.models.message import Outbox, MessageReceipt
 from app.services.rabbitmq import publish_message
 from loguru import logger
 
@@ -45,6 +45,29 @@ async def run_outbox_publisher(shutdown_event: asyncio.Event):
                         break
 
                     try:
+                        # 去重检查：如果 message_receipts 已有该消息的回执，
+                        # 说明消息在上个周期已被消费，无需重复发布。
+                        message_id = item.payload.get("message_id")
+                        if message_id is not None:
+                            receipt_stmt = (
+                                select(MessageReceipt)
+                                .where(MessageReceipt.message_id == message_id)
+                                .limit(1)
+                            )
+                            receipt_result = await session.execute(receipt_stmt)
+                            if receipt_result.scalar_one_or_none() is not None:
+                                logger.info(
+                                    "Outbox #{} (message #{}) 已有消费记录，跳过重复发布",
+                                    item.id, message_id,
+                                )
+                                await session.execute(
+                                    update(Outbox)
+                                    .where(Outbox.id == item.id)
+                                    .values(status="published")
+                                )
+                                await session.commit()
+                                continue
+
                         # 发布到 RabbitMQ（含 Publisher Confirms）
                         event_json = _json.dumps(item.payload)
 

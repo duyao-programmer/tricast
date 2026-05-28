@@ -8,7 +8,8 @@ from app.config import settings
 engine = create_async_engine(
     settings.mysql_url,
     echo=settings.app_debug,
-    pool_pre_ping=False,
+    pool_pre_ping=True,
+    pool_recycle=3600,
     pool_size=10,
     max_overflow=20,
 )
