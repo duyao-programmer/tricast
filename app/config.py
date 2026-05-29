@@ -22,6 +22,12 @@ class Settings(BaseSettings):
     rabbitmq_password: str = "demo_pass_2024"
     rabbitmq_mgmt_port: int = 15672
 
+    # Redis 配置
+    redis_host: str = "redis"
+    redis_port: int = 6379
+    redis_db: int = 0
+    redis_password: str = ""
+
     # JWT 配置
     jwt_secret_key: str = "change-me-to-a-random-string-at-least-32-chars"
     jwt_algorithm: str = "HS256"
@@ -38,11 +44,18 @@ class Settings(BaseSettings):
     app_debug: bool = True
 
     @property
+    def redis_url(self) -> str:
+        """构建 Redis 连接 URL"""
+        pw = f":{self.redis_password}@" if self.redis_password else ""
+        return f"redis://{pw}{self.redis_host}:{self.redis_port}/{self.redis_db}"
+
+    @property
     def mysql_url(self) -> str:
         """构建异步 MySQL 连接 URL（使用 asyncmy 驱动）"""
         return (
             f"mysql+asyncmy://{self.mysql_user}:{self.mysql_password}"
             f"@{self.mysql_host}:{self.mysql_port}/{self.mysql_database}"
+            f"?charset=utf8mb4"
         )
 
     @property

@@ -1,15 +1,20 @@
 # ============================================================================
 # 消息查询接口（角色分级 Schema 分发）
 # ============================================================================
+from datetime import datetime, date
 from fastapi import APIRouter, Depends, HTTPException, status, Query, Request
-from sqlalchemy import select, func
+from fastapi.responses import StreamingResponse
+import csv, io, json as _json
+from sqlalchemy import select, func, and_, or_
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import joinedload, selectinload
 from loguru import logger
 
 from app.database import get_db
 from app.models.message import Message, MessageReceipt
+from app.models.subscription import UserSubscription, MessageTagLink
 from app.models.user import User
+from app.services.redis import get_dead_letters
 from app.middleware.auth import get_current_user, require_role
 from app.schemas.message import (
     MessageAdminResponse, MessageAdvancedResponse, MessageRegularResponse,
@@ -53,6 +58,7 @@ def _build_admin_response(message: Message) -> MessageAdminResponse:
         publisher=publisher_name,
         channel=f"msg.fanout/{message.id}",
         receipts=receipts,
+        tags=getattr(message, 'tags', []),
     )
 
 
@@ -73,6 +79,7 @@ def _build_advanced_response(message: Message) -> MessageAdvancedResponse:
         published_at=message.published_at.isoformat() if message.published_at else None,
         publisher=publisher_name,
         channel=f"queue.advanced/{message.id}",
+        tags=getattr(message, 'tags', []),
     )
 
 
@@ -82,6 +89,7 @@ def _build_regular_response(message: Message) -> MessageRegularResponse:
         id=message.id,
         title=message.title,
         published_at=message.published_at.isoformat() if message.published_at else None,
+        tags=getattr(message, 'tags', []),
     )
 
 
@@ -97,18 +105,87 @@ _RESPONSE_BUILDERS = {
 async def list_messages(
     page: int = Query(1, ge=1, description="页码"),
     page_size: int = Query(20, ge=1, le=100, description="每页数量"),
+    subscribed: bool = Query(False, description="仅显示已订阅标签的消息"),
+    start_date: date | None = Query(None, description="开始日期（YYYY-MM-DD）"),
+    end_date: date | None = Query(None, description="结束日期（YYYY-MM-DD）"),
+    filter_tags: str | None = Query(None, description="筛选标签，逗号分隔如 tech,hr"),
+    keyword: str | None = Query(None, description="搜索关键词（标题+内容）"),
+    publisher_role: str | None = Query(None, description="按发布者角色筛选: admin/advanced/regular"),
     db: AsyncSession = Depends(get_db),
     current_user: dict = Depends(get_current_user),
 ):
-    """消息列表（按角色返回不同字段）"""
+    """消息列表（支持按时间范围、标签筛选）"""
     role = current_user["role"]
+    user_id = current_user["user_id"]
     offset = (page - 1) * page_size
 
-    stmt = select(Message).order_by(Message.published_at.desc()).offset(offset).limit(page_size)
+    stmt = select(Message).order_by(Message.published_at.desc())
+
+    # 按发布者角色筛选
+    if publisher_role:
+        sub = select(User.id).where(User.role == publisher_role, User.is_active == True).subquery()
+        stmt = stmt.where(Message.publisher_id.in_(select(sub)))
+
+    # 关键词搜索（标题 + 内容）
+    if keyword:
+        like = f"%{keyword}%"
+        stmt = stmt.where(or_(Message.title.like(like), Message.content.like(like)))
+
+    # 时间范围筛选
+    if start_date:
+        stmt = stmt.where(Message.published_at >= start_date)
+    if end_date:
+        stmt = stmt.where(Message.published_at < end_date)
+
+    # 标签筛选（指定标签，与订阅模式互斥）
+    if filter_tags and not subscribed:
+        tag_keys = [t.strip() for t in filter_tags.split(",") if t.strip()]
+        if tag_keys:
+            tag_msg_stmt = (
+                select(MessageTagLink.message_id.distinct())
+                .where(MessageTagLink.tag_key.in_(tag_keys))
+                .subquery()
+            )
+            stmt = stmt.where(Message.id.in_(select(tag_msg_stmt)))
+
+    # 订阅筛选（管理员忽略）
+    if subscribed and role != "admin":
+        # 获取用户订阅的标签
+        sub_stmt = select(UserSubscription.tag_key).where(
+            UserSubscription.user_id == user_id,
+            UserSubscription.subscribed == True,
+        )
+        sub_result = await db.execute(sub_stmt)
+        subscribed_tags = [row[0] for row in sub_result.fetchall()]
+
+        if subscribed_tags:
+            stmt = stmt.where(
+                Message.id.in_(
+                    select(MessageTagLink.message_id.distinct())
+                    .where(MessageTagLink.tag_key.in_(subscribed_tags))
+                )
+            )
+        else:
+            stmt = stmt.where(Message.id == -1)
+
+    stmt = stmt.offset(offset).limit(page_size)
     result = await db.execute(stmt)
     messages = result.scalars().all()
 
+    # 加载所有消息的标签
+    if messages:
+        message_ids = [m.id for m in messages]
+        tag_stmt = select(MessageTagLink).where(MessageTagLink.message_id.in_(message_ids))
+        tag_result = await db.execute(tag_stmt)
+        tag_links = tag_result.scalars().all()
+        tags_map = {}
+        for tl in tag_links:
+            tags_map.setdefault(tl.message_id, []).append(tl.tag_key)
+        for m in messages:
+            m.tags = tags_map.get(m.id, [])
+
     if role == "admin":
+        message_ids = [m.id for m in messages]
         message_ids = [m.id for m in messages]
         if message_ids:
             receipt_stmt = (
@@ -137,7 +214,34 @@ async def list_messages(
     }
 
 
-# ⚠️ /stats 必须在 /{message_id} 之前注册，否则 "stats" 会被当作 message_id 解析
+# ⚠️ /stats 和 /export 必须在 /{message_id} 之前注册
+@router.get("/export")
+async def export_messages(
+    fmt: str = Query("json", description="导出格式: csv 或 json"),
+    db: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(require_role("admin")),
+):
+    """导出所有消息为 CSV 或 JSON（仅管理员）"""
+    stmt = select(Message).order_by(Message.published_at.desc())
+    result = await db.execute(stmt)
+    messages = result.scalars().all()
+    if fmt == "csv":
+        output = io.StringIO()
+        writer = csv.writer(output)
+        writer.writerow(["ID", "标题", "内容", "发布者ID", "发布时间"])
+        for m in messages:
+            writer.writerow([m.id, m.title, m.content, m.publisher_id,
+                m.published_at.isoformat() if m.published_at else ""])
+        return StreamingResponse(iter([output.getvalue()]), media_type="text/csv",
+            headers={"Content-Disposition": "attachment; filename=messages.csv"})
+    else:
+        data = [{"id": m.id, "title": m.title, "content": m.content,
+                 "publisher_id": m.publisher_id,
+                 "published_at": m.published_at.isoformat() if m.published_at else None} for m in messages]
+        buf = io.StringIO(); _json.dump(data, buf, ensure_ascii=False, indent=2)
+        return StreamingResponse(iter([buf.getvalue()]), media_type="application/json",
+            headers={"Content-Disposition": "attachment; filename=messages.json"})
+
 @router.get("/stats", response_model=list[MessageStatsResponse])
 async def get_message_stats(
     db: AsyncSession = Depends(get_db),
@@ -198,9 +302,9 @@ async def list_dead_letters(
     request: Request,
     current_user: dict = Depends(require_role("admin")),
 ):
-    """死信队列内容（仅管理员）—— 从内存返回最近记录的 200 条死信"""
-    store: list = getattr(request.app.state, "dead_letter_store", [])
-    return {"total": len(store), "items": store}
+    """死信队列内容（仅管理员）—— 从 Redis 返回最近记录的 200 条死信"""
+    items = await get_dead_letters()
+    return {"total": len(items), "items": items}
 
 
 @router.get("/{message_id}")
@@ -221,6 +325,11 @@ async def get_message(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="消息不存在",
         )
+
+    # 加载标签
+    tag_stmt = select(MessageTagLink).where(MessageTagLink.message_id == message_id)
+    tag_result = await db.execute(tag_stmt)
+    message.tags = [t.tag_key for t in tag_result.scalars().all()]
 
     if role in ("admin", "advanced"):
         publisher_stmt = select(User).where(User.id == message.publisher_id)

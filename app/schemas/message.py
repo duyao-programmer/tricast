@@ -27,6 +27,7 @@ class MessagePublishRequest(BaseModel):
     title: str = Field(..., min_length=1, max_length=200)
     content: str = Field(..., min_length=1)
     secret_data: dict | None = Field(None, description="需加密的敏感数据（JSON 对象）")
+    tags: list[str] | None = Field(None, description="消息标签列表，如 ['tech', 'hr']")
 
 
 class BatchPublishRequest(BaseModel):
@@ -55,6 +56,7 @@ class MessageBaseResponse(BaseModel):
     id: int
     title: str
     published_at: str | None = None
+    tags: list[str] = Field(default=[], description="消息标签列表")
 
     model_config = {"from_attributes": True}
 

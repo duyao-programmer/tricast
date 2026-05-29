@@ -8,6 +8,7 @@ from loguru import logger
 
 from app.database import get_db
 from app.models.message import Message, Outbox
+from app.models.subscription import MessageTagLink
 from app.models.user import User
 from app.middleware.auth import require_role
 from app.schemas.message import (
@@ -68,6 +69,11 @@ async def _create_message_and_outbox(
     db.add(outbox)
     await db.flush()
     await db.refresh(outbox)
+
+    # 写入消息-标签关联
+    if req.tags:
+        for tag_key in req.tags:
+            db.add(MessageTagLink(message_id=message.id, tag_key=tag_key))
 
     return message.id, outbox.id
 

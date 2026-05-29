@@ -1,6 +1,7 @@
 # ============================================================================
 # JWT 生成/验证 + bcrypt 密码哈希服务
 # ============================================================================
+import uuid
 from datetime import datetime, timedelta, timezone
 from jose import jwt, JWTError
 import bcrypt
@@ -35,6 +36,7 @@ def create_access_token(user_id: int, username: str, role: str) -> tuple[str, in
         "sub": str(user_id),
         "username": username,
         "role": role,
+        "jti": uuid.uuid4().hex,
         "iat": now,
         "exp": expire,
     }
@@ -61,4 +63,5 @@ def decode_access_token(token: str) -> dict:
         "user_id": int(payload["sub"]),
         "username": payload["username"],
         "role": payload["role"],
+        "jti": payload.get("jti", ""),
     }

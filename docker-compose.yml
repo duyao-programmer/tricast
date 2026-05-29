@@ -42,6 +42,21 @@ services:
       retries: 5
 
   # ============================================================================
+  # Redis 7 缓存
+  # ============================================================================
+  redis:
+    image: redis:7-alpine
+    container_name: demo_redis
+    restart: unless-stopped
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+
+  # ============================================================================
   # Adminer 数据库 Web 管理工具
   # ============================================================================
   adminer:
@@ -68,6 +83,8 @@ services:
         condition: service_healthy
       rabbitmq:
         condition: service_healthy
+      redis:
+        condition: service_healthy
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
       interval: 15s
@@ -75,11 +92,13 @@ services:
       retries: 3
 
   # ============================================================================
-  # Nginx 反向代理
+  # 前端（React SPA + Nginx 反向代理）
   # ============================================================================
-  nginx:
-    image: nginx:alpine
-    container_name: demo_nginx
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: demo_frontend
     restart: unless-stopped
     ports:
       - "80:80"
@@ -94,3 +113,4 @@ services:
 
 volumes:
   mysql_data:
+  redis_data:

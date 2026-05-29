@@ -19,7 +19,8 @@ from app.services.rabbitmq import (
     QUEUE_DEAD,
 )
 from app.services.outbox import run_outbox_publisher
-from app.api import health, auth, publish, messages
+from app.services.redis import push_dead_letter, close_redis
+from app.api import health, auth, publish, messages, verify, admin, subscriptions, dashboard
 
 # ============================================================================
 # 日志配置
@@ -30,12 +31,6 @@ logger.add(
     format="<green>{time:YYYY-MM-DD HH:mm:ss}</green> | <level>{level: <8}</level> | <level>{message}</level>",
     level="DEBUG" if settings.app_debug else "INFO",
 )
-
-# ============================================================================
-# 死信消息内存存储（最多保留 200 条，供 API 查询）
-# ============================================================================
-dead_letter_store: list[dict] = []
-
 
 # ============================================================================
 # 消费者消息处理回调
@@ -127,9 +122,10 @@ async def handle_dead_message(body: bytes, consumer_role: str):
         "body": event_data,
     }
 
-    dead_letter_store.append(record)
-    if len(dead_letter_store) > 200:
-        dead_letter_store[:] = dead_letter_store[-200:]
+    try:
+        await push_dead_letter(record)
+    except Exception as e:
+        logger.error("死信写入 Redis 失败: {}", e)
 
     msg_id = event_data.get("message_id", "?")
     msg_title = event_data.get("title", "?")
@@ -189,7 +185,6 @@ async def lifespan(app: FastAPI):
     # 将协程引用保存到 app.state，供健康监控使用
     app.state.consumer_tasks = consumer_tasks
     app.state.outbox_task = outbox_task
-    app.state.dead_letter_store = dead_letter_store
 
     yield
 
@@ -213,6 +208,7 @@ async def lifespan(app: FastAPI):
     except asyncio.TimeoutError:
         logger.warning("后台协程未在 15 秒内退出，强制取消")
 
+    await close_redis()
     logger.info("应用已关闭")
 
 
@@ -229,6 +225,10 @@ app = FastAPI(
 # 注册路由
 app.include_router(health.router)
 app.include_router(auth.router)
+app.include_router(verify.router)
+app.include_router(admin.router)
+app.include_router(subscriptions.router)
+app.include_router(dashboard.router)
 app.include_router(publish.router)
 app.include_router(messages.router)
 

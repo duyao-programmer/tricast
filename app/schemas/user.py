@@ -40,8 +40,7 @@ class UserLoginRequest(BaseModel):
 
 
 class TokenResponse(BaseModel):
-    """登录成功返回的 JWT 令牌"""
-    access_token: str
+    """登录成功返回（JWT 通过 Set-Cookie 下发，body 仅返回元数据）"""
     token_type: str = "bearer"
     expires_in: int  # 秒
     username: str

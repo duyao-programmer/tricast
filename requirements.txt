@@ -11,3 +11,4 @@ pydantic[email]==2.10.4
 pydantic-settings==2.7.1
 python-multipart==0.0.20
 loguru==0.7.3
+redis[hiredis]==5.2.1

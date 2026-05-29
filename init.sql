@@ -76,6 +76,51 @@ CREATE TABLE IF NOT EXISTS failed_login_log (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- ============================================================================
+-- 组件权限配置表（管理员通过 UI 管理各角色可见的组件）
+-- ============================================================================
+CREATE TABLE IF NOT EXISTS role_component_permissions (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    role VARCHAR(50) NOT NULL COMMENT '角色名，不用ENUM以便未来扩展',
+    component_key VARCHAR(100) NOT NULL COMMENT '组件唯一标识',
+    allowed BOOLEAN NOT NULL DEFAULT FALSE COMMENT '是否允许该角色看到此组件',
+    description VARCHAR(200) COMMENT '组件中文说明',
+    UNIQUE KEY uk_role_component (role, component_key),
+    INDEX idx_role (role)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- ============================================================================
+-- 预置权限数据（8个组件 × 3个角色 = 24条）
+-- ============================================================================
+INSERT INTO role_component_permissions (role, component_key, allowed, description) VALUES
+-- 管理员
+('admin', 'dashboard',              TRUE, '仪表盘首页'),
+('admin', 'message_list',           TRUE, '消息列表'),
+('admin', 'message_detail',         TRUE, '消息详情'),
+('admin', 'message_stats',          TRUE, '耗时统计'),
+('admin', 'dead_letters',           TRUE, '死信查看'),
+('admin', 'publish_message',        TRUE, '发布消息'),
+('admin', 'user_management',        TRUE, '用户管理'),
+('admin', 'permission_management',  TRUE, '权限管理'),
+-- 高级用户
+('advanced', 'dashboard',           TRUE,  '仪表盘首页'),
+('advanced', 'message_list',        TRUE,  '消息列表'),
+('advanced', 'message_detail',      TRUE,  '消息详情'),
+('advanced', 'message_stats',       FALSE, '耗时统计'),
+('advanced', 'dead_letters',        FALSE, '死信查看'),
+('advanced', 'publish_message',     FALSE, '发布消息'),
+('advanced', 'user_management',     FALSE, '用户管理'),
+('advanced', 'permission_management',FALSE, '权限管理'),
+-- 普通用户
+('regular', 'dashboard',            TRUE,  '仪表盘首页'),
+('regular', 'message_list',         TRUE,  '消息列表'),
+('regular', 'message_detail',       TRUE,  '消息详情'),
+('regular', 'message_stats',        FALSE, '耗时统计'),
+('regular', 'dead_letters',         FALSE, '死信查看'),
+('regular', 'publish_message',      FALSE, '发布消息'),
+('regular', 'user_management',      FALSE, '用户管理'),
+('regular', 'permission_management',FALSE, '权限管理');
+
+-- ============================================================================
 -- 预置用户（密码通过 scripts/gen_password_hash.py 生成后替换）
 -- 默认密码: admin123 / adv123 / reg123
 -- 注意：以下哈希值为占位符，部署前必须运行 gen_password_hash.py 生成真实哈希
